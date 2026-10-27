@@ -33,8 +33,7 @@ namespace Tests
         public void FindGameById()
         {
             var gameEntity = repo.Insert(new GameEntity(10));
-            repo.FindById(gameEntity.Id)
-                .Should().NotBe(Guid.Empty);
+            repo.FindById(gameEntity.Id).Should().BeEquivalentTo(gameEntity);
         }
 
         [Test]
@@ -99,6 +98,49 @@ namespace Tests
         public void TryUpdateWaitingToStart_Fails_WhenNoGame()
         {
             repo.TryUpdateWaitingToStart(new GameEntity(10)).Should().BeFalse();
+        }
+
+        [Test]
+        public void ContinueSavedGameUsingNewRepository()
+        {
+            var game = repo.Insert(new GameEntity(2));
+            var first = new UserEntity(Guid.NewGuid()) { Login = "Human" };
+            var second = new UserEntity(Guid.NewGuid()) { Login = "AI" };
+            game.AddPlayer(first);
+            game.AddPlayer(second);
+            game.SetPlayerDecision(first.Id, PlayerDecision.Rock);
+            game.SetPlayerDecision(second.Id, PlayerDecision.Scissors);
+            game.FinishTurn();
+            repo.Update(game);
+
+            var reopenedRepo = new MongoGameRepository(TestMongoDatabase.Create());
+            var restored = reopenedRepo.FindById(game.Id);
+            restored.Should().BeEquivalentTo(game);
+            restored.Should().NotBeSameAs(game);
+            restored.SetPlayerDecision(first.Id, PlayerDecision.Paper);
+            restored.SetPlayerDecision(second.Id, PlayerDecision.Paper);
+            var lastTurn = restored.FinishTurn();
+            reopenedRepo.Update(restored);
+
+            lastTurn.TurnNumber.Should().Be(2);
+            lastTurn.Result.Should().Be(TurnResult.Draw);
+            var finished = repo.FindById(game.Id);
+            finished.Status.Should().Be(GameStatus.Finished);
+            finished.Players[0].Score.Should().Be(1);
+            finished.Players[1].Score.Should().Be(0);
+        }
+
+        [Test]
+        public void ReturnNoWaitingGamesWhenLimitIsZero()
+        {
+            repo.Insert(new GameEntity(2));
+            repo.FindWaitingToStart(0).Should().BeEmpty();
+        }
+
+        [Test]
+        public void ReturnNullForUnknownGame()
+        {
+            repo.FindById(Guid.NewGuid()).Should().BeNull();
         }
     }
 }

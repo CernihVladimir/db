@@ -2,6 +2,7 @@ using System;
 using System.Linq;
 using FluentAssertions;
 using Game.Domain;
+using MongoDB.Bson;
 using MongoDB.Driver;
 using NUnit.Framework;
 
@@ -79,7 +80,74 @@ namespace Tests
             var db = TestMongoDatabase.Create();
             var collection = db.GetCollection<GameTurnEntity>(MongoGameTurnRepository.CollectionName);
             var indexes = collection.Indexes.List().ToList();
-            indexes.Should().Contain(i => i.ToString().Contains("gameId"));
+            indexes.Should().Contain(index => index["key"].AsBsonDocument.Equals(
+                new BsonDocument { { "gameId", 1 }, { "turnNumber", -1 } }));
+        }
+
+        [Test]
+        public void ReadSavedTurnUsingNewRepository()
+        {
+            var turn = repo.Insert(new GameTurnEntity
+            {
+                GameId = Guid.NewGuid(),
+                TurnNumber = 1,
+                FirstPlayerMove = Move.Scissors,
+                SecondPlayerMove = Move.Paper,
+                Result = TurnResult.FirstPlayerWon,
+                CreatedAt = new DateTime(2026, 10, 27, 0, 0, 0, DateTimeKind.Utc)
+            });
+
+            var reopened = new MongoGameTurnRepository(TestMongoDatabase.Create());
+
+            reopened.GetLastTurns(turn.GameId, 5).Single().Should().BeEquivalentTo(turn);
+        }
+
+        [Test]
+        public void UseIndexForLatestFiveWithoutScanningOtherGames()
+        {
+            var db = TestMongoDatabase.Create();
+            var collection = db.GetCollection<GameTurnEntity>(MongoGameTurnRepository.CollectionName);
+            var gameId = Guid.NewGuid();
+            var otherGameId = Guid.NewGuid();
+            collection.InsertMany(Enumerable.Range(1, 1000).Select(number => new GameTurnEntity
+            {
+                GameId = number % 2 == 0 ? gameId : otherGameId,
+                TurnNumber = number,
+                FirstPlayerMove = Move.Rock,
+                SecondPlayerMove = Move.Rock,
+                Result = TurnResult.Draw,
+                CreatedAt = DateTime.UtcNow
+            }));
+
+            repo.GetLastTurns(gameId, 5).Select(turn => turn.TurnNumber)
+                .Should().Equal(992, 994, 996, 998, 1000);
+
+            var filter = Builders<GameTurnEntity>.Filter.Eq(turn => turn.GameId, gameId)
+                .Render(collection.DocumentSerializer, collection.Settings.SerializerRegistry);
+            var explain = db.RunCommand<BsonDocument>(new BsonDocument
+            {
+                { "explain", new BsonDocument
+                    {
+                        { "find", MongoGameTurnRepository.CollectionName },
+                        { "filter", filter },
+                        { "sort", new BsonDocument("turnNumber", -1) },
+                        { "limit", 5 }
+                    }
+                },
+                { "verbosity", "executionStats" }
+            });
+
+            explain["executionStats"]["nReturned"].ToInt32().Should().Be(5);
+            explain["executionStats"]["totalDocsExamined"].ToInt32().Should().Be(5);
+            var plan = explain["queryPlanner"]["winningPlan"].ToJson();
+            plan.Should().Contain("IXSCAN").And.NotContain("\"SORT\"");
+        }
+
+        [Test]
+        public void ReturnNoTurnsWhenCountIsZero()
+        {
+            var turn = repo.Insert(new GameTurnEntity { GameId = Guid.NewGuid(), TurnNumber = 1 });
+            repo.GetLastTurns(turn.GameId, 0).Should().BeEmpty();
         }
     }
 }
