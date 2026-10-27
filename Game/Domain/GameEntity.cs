@@ -22,7 +22,7 @@ namespace Game.Domain
             Status = status;
             TurnsCount = turnsCount;
             CurrentTurnIndex = currentTurnIndex;
-            this.players = players;
+            this.players = players ?? new List<Player>();
         }
 
         public Guid Id
@@ -79,22 +79,47 @@ namespace Game.Domain
 
         public GameTurnEntity FinishTurn()
         {
+            if (Players.Count < 2)
+                throw new InvalidOperationException();
+            if (!Players[0].Decision.HasValue || !Players[1].Decision.HasValue)
+                throw new InvalidOperationException();
+
             var winnerId = Guid.Empty;
-            for (int i = 0; i < 2; i++)
+            var player0Won = Players[0].Decision.Value.Beats(Players[1].Decision.Value);
+            var player1Won = Players[1].Decision.Value.Beats(Players[0].Decision.Value);
+            if (player0Won && !player1Won)
             {
-                var player = Players[i];
-                var opponent = Players[1 - i];
-                if (!player.Decision.HasValue || !opponent.Decision.HasValue)
-                    throw new InvalidOperationException();
-                if (player.Decision.Value.Beats(opponent.Decision.Value))
-                {
-                    player.Score++;
-                    winnerId = player.UserId;
-                }
+                Players[0].Score++;
+                winnerId = Players[0].UserId;
             }
-            //TODO Заполнить все внутри GameTurnEntity, в том числе winnerId
-            var result = new GameTurnEntity();
-            // Это должно быть после создания GameTurnEntity
+            else if (player1Won && !player0Won)
+            {
+                Players[1].Score++;
+                winnerId = Players[1].UserId;
+            }
+            else
+            {
+                winnerId = Guid.Empty;
+            }
+
+            TurnResult turnResult = TurnResult.Draw;
+            if (winnerId == Players[0].UserId)
+                turnResult = TurnResult.FirstPlayerWon;
+            else if (winnerId == Players[1].UserId)
+                turnResult = TurnResult.SecondPlayerWon;
+            else
+                turnResult = TurnResult.Draw;
+
+            var result = new GameTurnEntity
+            {
+                GameId = Id,
+                TurnNumber = CurrentTurnIndex + 1,
+                FirstPlayerMove = (Move)(int)Players[0].Decision.Value,
+                SecondPlayerMove = (Move)(int)Players[1].Decision.Value,
+                Result = turnResult,
+                CreatedAt = DateTime.UtcNow
+            };
+
             foreach (var player in Players)
                 player.Decision = null;
             CurrentTurnIndex++;
