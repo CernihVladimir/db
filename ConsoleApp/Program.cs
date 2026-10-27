@@ -33,25 +33,37 @@ namespace ConsoleApp
         {
             var humanUser = userRepo.GetOrCreateByLogin("Human");
             var aiUser = userRepo.GetOrCreateByLogin("AI");
-            var game = FindCurrentGame(humanUser) ?? StartNewGame(humanUser);
+            var game = FindCurrentGame(humanUser);
+            FindCurrentGame(aiUser);
+            humanUser = userRepo.FindById(humanUser.Id);
+            aiUser = userRepo.FindById(aiUser.Id);
+            game ??= StartNewGame(humanUser);
             if (!TryJoinToGame(game, aiUser))
             {
                 Console.WriteLine("Can't add AI user to the game");
                 return;
             }
 
+            if (game.CurrentTurnIndex > 0)
+            {
+                Console.WriteLine($"Resuming game at turn {game.CurrentTurnIndex + 1} of {game.TurnsCount}.");
+                ShowScore(game);
+            }
+
             while (HandleOneGameTurn(humanUser.Id))
             {
             }
 
-            Console.WriteLine("Game is finished");
+            var isPaused = userRepo.FindById(humanUser.Id).CurrentGameId.HasValue;
+            Console.WriteLine(isPaused ? "Game paused. Run again to continue." : "Game is finished");
+            Console.WriteLine("Press Enter to exit.");
             Console.ReadLine();
         }
 
         private GameEntity StartNewGame(UserEntity user)
         {
             Console.WriteLine("Enter desired number of turns in game:");
-            if (!int.TryParse(Console.ReadLine(), out var turnsCount))
+            if (!int.TryParse(Console.ReadLine(), out var turnsCount) || turnsCount <= 0)
             {
                 turnsCount = 5;
                 Console.WriteLine($"Bad input. Use default value for turns count: {turnsCount}");
@@ -72,8 +84,15 @@ namespace ConsoleApp
             if (IsUserInGame(user, game))
                 return true;
 
-            if (user.CurrentGameId.HasValue)
+            if (user.CurrentGameId.HasValue && user.CurrentGameId.Value != game.Id)
                 return false;
+
+            if (game.Players.Any(player => player.UserId == user.Id))
+            {
+                user.CurrentGameId = game.Id;
+                userRepo.Update(user);
+                return true;
+            }
 
             if (game.Status != GameStatus.WaitingToStart)
                 return false;
@@ -99,7 +118,12 @@ namespace ConsoleApp
         {
             if (humanUser.CurrentGameId == null) return null;
             var game = gameRepo.FindById(humanUser.CurrentGameId.Value);
-            if (game == null) return null;
+            if (game == null)
+            {
+                humanUser.CurrentGameId = null;
+                userRepo.Update(humanUser);
+                return null;
+            }
             switch (game.Status)
             {
                 case GameStatus.WaitingToStart:
@@ -107,6 +131,7 @@ namespace ConsoleApp
                     return game;
                 case GameStatus.Finished:
                 case GameStatus.Canceled:
+                    UpdatePlayersWhenGameFinished(game);
                     return null;
                 default:
                     throw new ArgumentOutOfRangeException();
@@ -137,8 +162,8 @@ namespace ConsoleApp
                 gameTurnRepo.Insert(turn);
             }
 
-            ShowScore(game);
             gameRepo.Update(game);
+            ShowScore(game);
             return true;
         }
 
@@ -151,7 +176,7 @@ namespace ConsoleApp
 
         private PlayerDecision GetAiDecision()
         {
-            return (PlayerDecision)Math.Min(3, 1 + random.Next(4));
+            return (PlayerDecision)random.Next(1, 4);
         }
 
         private void UpdatePlayersWhenGameFinished(GameEntity game)
@@ -161,7 +186,7 @@ namespace ConsoleApp
             foreach (var player in game.Players)
             {
                 var playerUser = userRepo.FindById(player.UserId);
-                if (playerUser == null) continue;
+                if (playerUser == null || playerUser.CurrentGameId != game.Id) continue;
                 playerUser.ExitGame();
                 userRepo.Update(playerUser);
             }
@@ -174,6 +199,7 @@ namespace ConsoleApp
             Console.WriteLine("1 - Rock");
             Console.WriteLine("2 - Scissors");
             Console.WriteLine("3 - Paper");
+            Console.WriteLine("Esc - pause and exit");
 
             while (true)
             {
@@ -196,7 +222,12 @@ namespace ConsoleApp
                 {
                     string firstMove = turn.FirstPlayerMove.ToString();
                     string secondMove = turn.SecondPlayerMove.ToString();
-                    string result = turn.Result.ToString();
+                    string result = turn.Result switch
+                    {
+                        TurnResult.FirstPlayerWon => $"Winner: {players[0].Name}",
+                        TurnResult.SecondPlayerWon => $"Winner: {players[1].Name}",
+                        _ => "Draw"
+                    };
                     Console.WriteLine($"Turn {turn.TurnNumber}: {players[0].Name}={firstMove}, {players[1].Name}={secondMove}, Result={result}");
                 }
             }

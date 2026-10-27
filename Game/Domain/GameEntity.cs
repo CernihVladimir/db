@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using MongoDB.Bson.Serialization.Attributes;
 
 namespace Game.Domain
 {
     public class GameEntity
     {
+        [BsonElement]
         private readonly List<Player> players;
 
         public GameEntity(int turnsCount)
@@ -13,6 +15,7 @@ namespace Game.Domain
         {
         }
 
+        [BsonConstructor]
         public GameEntity(Guid id, GameStatus status, int turnsCount, int currentTurnIndex, List<Player> players)
         {
             Id = id;
@@ -31,6 +34,7 @@ namespace Game.Domain
 
         public IReadOnlyList<Player> Players => players.AsReadOnly();
 
+        [BsonElement]
         public int TurnsCount { get; }
 
         public int CurrentTurnIndex { get; private set; }
@@ -75,36 +79,22 @@ namespace Game.Domain
 
         public GameTurnEntity FinishTurn()
         {
-            if (Players.Count < 2)
-                throw new InvalidOperationException();
-            if (!Players[0].Decision.HasValue || !Players[1].Decision.HasValue)
-                throw new InvalidOperationException();
+            if (Status != GameStatus.Playing || IsFinished() || Players.Count != 2 || !HaveDecisionOfEveryPlayer)
+                throw new InvalidOperationException("A turn requires an active game and both players' decisions.");
 
-            var winnerId = Guid.Empty;
             var player0Won = Players[0].Decision.Value.Beats(Players[1].Decision.Value);
             var player1Won = Players[1].Decision.Value.Beats(Players[0].Decision.Value);
-            if (player0Won && !player1Won)
+            if (player0Won)
             {
                 Players[0].Score++;
-                winnerId = Players[0].UserId;
             }
-            else if (player1Won && !player0Won)
+            else if (player1Won)
             {
                 Players[1].Score++;
-                winnerId = Players[1].UserId;
-            }
-            else
-            {
-                winnerId = Guid.Empty;
             }
 
-            TurnResult turnResult = TurnResult.Draw;
-            if (winnerId == Players[0].UserId)
-                turnResult = TurnResult.FirstPlayerWon;
-            else if (winnerId == Players[1].UserId)
-                turnResult = TurnResult.SecondPlayerWon;
-            else
-                turnResult = TurnResult.Draw;
+            var turnResult = player0Won ? TurnResult.FirstPlayerWon
+                : player1Won ? TurnResult.SecondPlayerWon : TurnResult.Draw;
 
             var result = new GameTurnEntity
             {

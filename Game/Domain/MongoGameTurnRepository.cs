@@ -21,23 +21,23 @@ namespace Game.Domain
                 .Ascending(t => t.GameId)
                 .Descending(t => t.TurnNumber);
             var indexModel = new CreateIndexModel<GameTurnEntity>(indexKeysDefinition);
-            try
-            {
-                turnCollection.Indexes.CreateOne(indexModel);
-            }
-            catch
-            {
-            }
+            turnCollection.Indexes.CreateOne(indexModel);
         }
 
         public GameTurnEntity Insert(GameTurnEntity turn)
         {
+            if (turn.CreatedAt == default)
+                turn.CreatedAt = DateTime.UtcNow;
             turnCollection.InsertOne(turn);
             return turn;
         }
 
         public IList<GameTurnEntity> GetLastTurns(Guid gameId, int count)
         {
+            if (count < 0)
+                throw new ArgumentOutOfRangeException(nameof(count));
+            if (count == 0)
+                return new List<GameTurnEntity>();
             var result = turnCollection.Find(t => t.GameId == gameId)
                 .SortByDescending(t => t.TurnNumber)
                 .Limit(count)
